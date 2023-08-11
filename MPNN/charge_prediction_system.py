@@ -19,32 +19,24 @@ __maintainer__ = "ali raza"
 __email__ = "razaa@oregonstate.edu"
 __status__ = "done"
 
-
 from model import *
-from torch_geometric.data import Data, DataLoader
-import numpy as np
 from matplotlib import pyplot as plt
-import math
 import copy
-
+import torch
 
 
 def charge_prediction_system(train_loader, valid_loader,NUM_NODE_FEATURES,EMBEDDING_SIZE,GNN_LAYERS,HIDDEN_FEATURES_SIZE,train_data_size, valid_data_size, MAX_EPOCHS, iteration, system, crit = torch.nn.L1Loss()):
 	# initializing the model
-
 	device = torch.device('cuda')
-	if (system == 'vanilla' or system == 'soft_con'):
-		print(">>> vanilla model")
-		model = Net_vanilla(NUM_NODE_FEATURES,EMBEDDING_SIZE,GNN_LAYERS,HIDDEN_FEATURES_SIZE).to(device)
-	elif(system == 'mean_cor'):
-		print(">>> mean_correction_model")
-		model = Net_mean_correction(NUM_NODE_FEATURES,EMBEDDING_SIZE,GNN_LAYERS,HIDDEN_FEATURES_SIZE).to(device)
-	else:
+	if system == 'gaussian_cor':
 		print(">>> gaussian_correction_model")
-		model = Net_gaussian_correction(NUM_NODE_FEATURES,EMBEDDING_SIZE,GNN_LAYERS,HIDDEN_FEATURES_SIZE).to(device)
+		model = Net_gaussian_correction(NUM_NODE_FEATURES, EMBEDDING_SIZE, GNN_LAYERS, HIDDEN_FEATURES_SIZE).to(device)
+	else:
+		print(">>> gaussian_correction_model_with_sampling")
+		model = Net_gaussian_correction_with_sampling(NUM_NODE_FEATURES, EMBEDDING_SIZE, GNN_LAYERS, HIDDEN_FEATURES_SIZE).to(device)
 
-	optimizer = torch.optim.Adam(model.parameters(), lr=0.005)
-	model = model.double()
+	optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
+	# model = model.double()
 
 	train_total_loss = []
 	valid_total_loss = []
@@ -56,14 +48,14 @@ def charge_prediction_system(train_loader, valid_loader,NUM_NODE_FEATURES,EMBEDD
 		for data in train_loader:
 			data = data.to(device)
 			optimizer.zero_grad()
-			pred, _ , _, _= model(data)
+			if system == 'gaussian_cor':
+				pred, _ , _, _= model(data)
+			else:
+				pred = model(data)
 
 			label = data.y.to(device)
-			if (system == 'soft_con'):
-				# print("soft constraint loss")
-				loss = 100*crit(pred, label) + abs(sum(pred))
-			else:
-				loss = crit(pred, label)
+			loss = crit(pred, label)
+			print(loss)
 			loss.backward()
 			loss_all += data.num_graphs * loss.item()
 			optimizer.step()
@@ -76,12 +68,12 @@ def charge_prediction_system(train_loader, valid_loader,NUM_NODE_FEATURES,EMBEDD
 		with torch.no_grad():
 			for data in train_loader:
 				data = data.to(device)
-				pred, _, _,_  = model(data)
-				label = data.y.to(device)
-				if (system == 'soft_con'):
-					loss = 100 * crit(pred, label) + abs(sum(pred))
+				if system == 'gaussian_cor':
+					pred, _ , _, _= model(data)
 				else:
-					loss = crit(pred, label)
+					pred = model(data)
+				label = data.y.to(device)
+				loss = crit(pred, label)
 				loss_all += data.num_graphs * loss.item()
 		train_acc = loss_all / train_data_size
 		train_total_loss.append(train_acc)
@@ -91,12 +83,12 @@ def charge_prediction_system(train_loader, valid_loader,NUM_NODE_FEATURES,EMBEDD
 		with torch.no_grad():
 			for data in valid_loader:
 				data = data.to(device)
-				pred, _, _, _ = model(data)
-				label = data.y.to(device)
-				if (system == 'soft_con'):
-					loss = 100 * crit(pred, label) + abs(sum(pred))
+				if system == 'gaussian_cor':
+					pred, _ , _, _= model(data)
 				else:
-					loss = crit(pred, label)
+					pred = model(data)
+				label = data.y.to(device)
+				loss = crit(pred, label)
 				loss_all += data.num_graphs * loss.item()
 		valid_acc = loss_all / valid_data_size
 

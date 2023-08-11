@@ -23,59 +23,96 @@ __status__ = "done"
 import torch
 import torch.nn.functional as F
 
+from torch.func import grad, vmap
+from torch.distributions import MultivariateNormal
 from torch import Tensor
 from torch.nn import Parameter as Param
 from torch_geometric.nn.conv import MessagePassing
 from torch_geometric.nn.inits import uniform
 import torch_scatter as ts
-import copy
 
+device = torch.device('cuda')
 
+k = 0
+def multivariate_mean_variance(means, sigmas):
+    n = len(sigmas)
 
-class Net_vanilla(torch.nn.Module):
-    def __init__(self, NUM_NODE_FEATURES,EMBEDDING_SIZE,GNN_LAYERS,HIDDEN_FEATURES_SIZE ):
-        print("GNN_LAYERS = ", GNN_LAYERS)
-        print("EMBEDDING_SIZE = ", EMBEDDING_SIZE)
-        print("HIDDEN_FEATURES_SIZE = ", HIDDEN_FEATURES_SIZE)
-        
-        super(Net_vanilla, self).__init__()
-        self.lin0 = torch.nn.Linear(NUM_NODE_FEATURES, EMBEDDING_SIZE,bias=False) # for embedding
-        self.conv1 = GatedGraphConv(HIDDEN_FEATURES_SIZE, GNN_LAYERS)
-        self.lin1 = torch.nn.Linear(HIDDEN_FEATURES_SIZE, 1)
-        
-    def forward(self, data):
-        x, edge_index = data.x, data.edge_index
-        x1 = torch.sigmoid(self.lin0(x)) # embedding
-        x = self.conv1(x1, edge_index)
-        x = F.relu(x)
-        x = self.lin1(x)
+    A = torch.inverse(torch.diag(sigmas[:-1]))
+    B = torch.ones(n-1, n-1).to(device) * torch.pow(sigmas[-1], -1)
 
-        return x.squeeze(1), x1.squeeze(1), None
+    covariance_matrix = A - 1/(1 + torch.trace(torch.matmul(B, A))) * torch.matmul(A ,torch.matmul(B, A))
 
-class Net_mean_correction(torch.nn.Module):
+    c = (k - means[-1])/sigmas[-1]
+    reduced_mean = torch.matmul(covariance_matrix, torch.ones(n-1).to(device)*c + torch.div(means[:-1], sigmas[:-1]))
+
+    return reduced_mean, covariance_matrix
+
+def conditional_marginal(means, sigmas, X, i):
+    conditional_mean = means[i] + sigmas[i]*(k - torch.sum(means))/torch.sum(sigmas)
+    conditional_var = sigmas[i] - torch.square(sigmas[i])/torch.sum(sigmas)
+    return (2 * torch.pi * conditional_var)**(-1/2) * torch.exp(-1/(2 * conditional_var) * (X[i] - conditional_mean)**2)
+
+def sample_multivariate(reduced_mean, covariance_matrix):
+    m = MultivariateNormal(reduced_mean, covariance_matrix)
+    X = m.sample()
+    X = torch.cat((X, torch.tensor([k - torch.sum(X)]).to(device)), dim=0)
+
+    return X
+
+## Need to check
+def calculate_grad(pred, mu, sigma, constraint_mu, constraint_covariance):
+    n = len(sigma)
+    dx_dmu = torch.zeros(n, n).to(device)
+    dx_dsigma = torch.zeros(n, n).to(device)
+    for i in range(0, n):
+        dx_dmu[i] = grad(conditional_marginal, argnums = 0)(mu, sigma, pred, i)
+        dx_dsigma[i] = grad(conditional_marginal, argnums = 1)(mu, sigma, pred, i)
+
+    return dx_dmu, dx_dsigma
+
+class Sample(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, mu, sigma):
+        print(mu.size())
+        constraint_mu, constraint_covariance = multivariate_mean_variance(mu, sigma)
+        pred = sample_multivariate(constraint_mu, constraint_covariance)
+        ctx.save_for_backward(pred, mu, sigma, constraint_mu, constraint_covariance)
+        return pred
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        pred, mu, sigma, constraint_mu, constraint_covariance = ctx.saved_tensors
+        dx_dmu, dx_dsigma = calculate_grad(pred, mu, sigma, constraint_mu, constraint_covariance)
+        dl_dmu = dx_dmu * grad_output
+        dl_dsigma = dx_dsigma * grad_output
+        return dl_dmu, dl_dsigma
+    
+class Net_gaussian_correction_with_sampling(torch.nn.Module):
     def __init__(self, NUM_NODE_FEATURES,EMBEDDING_SIZE,GNN_LAYERS,HIDDEN_FEATURES_SIZE):
         print("GNN_LAYERS = ", GNN_LAYERS)
         print("EMBEDDING_SIZE = ", EMBEDDING_SIZE)
         print("HIDDEN_FEATURES_SIZE = ", HIDDEN_FEATURES_SIZE)
         
-        super(Net_mean_correction, self).__init__()
+        super(Net_gaussian_correction_with_sampling, self).__init__()
         self.lin0 = torch.nn.Linear(NUM_NODE_FEATURES, EMBEDDING_SIZE,bias=False) # for embedding
         self.conv1 = GatedGraphConv(HIDDEN_FEATURES_SIZE, GNN_LAYERS)
         self.lin1 = torch.nn.Linear(HIDDEN_FEATURES_SIZE, 1)
-
+        self.lin2 = torch.nn.Linear(HIDDEN_FEATURES_SIZE, 1)
+        self.softplus = torch.nn.Softplus()
 
     def forward(self, data):
         x, edge_index = data.x, data.edge_index
         x1 = torch.sigmoid(self.lin0(x)) # embedding
-        x = self.conv1(x1, edge_index) 
+        x = self.conv1(x1, edge_index)
         x = F.relu(x)
-        x = self.lin1(x)
-        uncorrected_mu = x.clone()
-        mean_all = ts.scatter_mean(x, data.batch, dim=0)
-        for i in range(0,data.num_graphs):
-            x[data.batch==i] = x[data.batch==i]- mean_all[i]
-        return x.squeeze(1), x1.squeeze(1), None, uncorrected_mu.squeeze(1)
+        mu = self.lin1(x)
+        sigma = self.softplus(self.lin2(x))
 
+        ## Need to change mu and sigma based on batch and data.num_graphs
+
+        pred = Sample.apply(mu.squeeze(1), sigma.squeeze(1))
+
+        return pred
 
 class Net_gaussian_correction(torch.nn.Module):
     def __init__(self, NUM_NODE_FEATURES,EMBEDDING_SIZE,GNN_LAYERS,HIDDEN_FEATURES_SIZE):
@@ -103,9 +140,8 @@ class Net_gaussian_correction(torch.nn.Module):
 
         for i in range(0, data.num_graphs):
             mu[data.batch == i] = mu[data.batch == i] - mu_all[i] * (sigma[data.batch == i] / sigma_all[i])
+
         return mu.squeeze(1), x1.squeeze(1), sigma.squeeze(1), uncorrected_mu.squeeze(1)
-
-
 
 
 # credit to https://github.com/rusty1s/pytorch_geometric/

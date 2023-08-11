@@ -23,7 +23,7 @@ def data_handling(graphs_folder, READ_LABELS = True):
 	import os
 	import numpy as np
 	import torch
-	from torch_geometric.data import Data, DataLoader
+	from torch_geometric.data import Data
 
 	# crystals_names = os.listdir("xtals/") # returns list
 	# crystals_names = [s.split('.')[0] for s in crystals_names]
@@ -84,9 +84,9 @@ def data_handling(graphs_folder, READ_LABELS = True):
 		edges = [edge_in, edge_out]
 		edges = np.asarray(edges)
 
-		x = torch.tensor(node_features, dtype=torch.double)
+		x = torch.tensor(node_features, dtype=torch.float)
 		if (READ_LABELS):
-			y = torch.tensor(labels, dtype=torch.double)
+			y = torch.tensor(labels, dtype=torch.float)
 		edge_index = torch.tensor(edges, dtype=torch.long)
 		#     print("X.size: {}, y.size: {}, edge_index.size: {}".format(x.size(), y.size(), edge_index.size()))
 		if (READ_LABELS):
