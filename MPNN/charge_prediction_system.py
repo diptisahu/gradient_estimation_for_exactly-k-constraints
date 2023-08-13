@@ -55,7 +55,6 @@ def charge_prediction_system(train_loader, valid_loader,NUM_NODE_FEATURES,EMBEDD
 
 			label = data.y.to(device)
 			loss = crit(pred, label)
-			print(loss)
 			loss.backward()
 			loss_all += data.num_graphs * loss.item()
 			optimizer.step()

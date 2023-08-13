@@ -37,7 +37,7 @@ k = 0
 def multivariate_mean_variance(means, sigmas):
     n = len(sigmas)
 
-    A = torch.inverse(torch.diag(sigmas[:-1]))
+    A = torch.inverse(torch.diag(torch.pow(sigmas[:-1], -1)))
     B = torch.ones(n-1, n-1).to(device) * torch.pow(sigmas[-1], -1)
 
     covariance_matrix = A - 1/(1 + torch.trace(torch.matmul(B, A))) * torch.matmul(A ,torch.matmul(B, A))
@@ -73,7 +73,6 @@ def calculate_grad(pred, mu, sigma, constraint_mu, constraint_covariance):
 class Sample(torch.autograd.Function):
     @staticmethod
     def forward(ctx, mu, sigma):
-        print(mu.size())
         constraint_mu, constraint_covariance = multivariate_mean_variance(mu, sigma)
         pred = sample_multivariate(constraint_mu, constraint_covariance)
         ctx.save_for_backward(pred, mu, sigma, constraint_mu, constraint_covariance)
@@ -94,7 +93,7 @@ class Net_gaussian_correction_with_sampling(torch.nn.Module):
         print("HIDDEN_FEATURES_SIZE = ", HIDDEN_FEATURES_SIZE)
         
         super(Net_gaussian_correction_with_sampling, self).__init__()
-        self.lin0 = torch.nn.Linear(NUM_NODE_FEATURES, EMBEDDING_SIZE,bias=False) # for embedding
+        self.lin0 = torch.nn.Linear(NUM_NODE_FEATURES, EMBEDDING_SIZE, bias=False) # for embedding
         self.conv1 = GatedGraphConv(HIDDEN_FEATURES_SIZE, GNN_LAYERS)
         self.lin1 = torch.nn.Linear(HIDDEN_FEATURES_SIZE, 1)
         self.lin2 = torch.nn.Linear(HIDDEN_FEATURES_SIZE, 1)
@@ -108,9 +107,15 @@ class Net_gaussian_correction_with_sampling(torch.nn.Module):
         mu = self.lin1(x)
         sigma = self.softplus(self.lin2(x))
 
-        ## Need to change mu and sigma based on batch and data.num_graphs
+        mu = torch.squeeze(mu)
+        sigma = torch.squeeze(sigma)
 
-        pred = Sample.apply(mu.squeeze(1), sigma.squeeze(1))
+        pred = torch.empty_like(mu)
+        for i in range(0, data.num_graphs):
+            mu_sample = mu[data.batch == i]
+            sigma_sample = sigma[data.batch == i]
+
+            pred[data.batch == i] = Sample.apply(mu_sample, sigma_sample)
 
         return pred
 
@@ -121,7 +126,7 @@ class Net_gaussian_correction(torch.nn.Module):
         print("HIDDEN_FEATURES_SIZE = ", HIDDEN_FEATURES_SIZE)
         
         super(Net_gaussian_correction, self).__init__()
-        self.lin0 = torch.nn.Linear(NUM_NODE_FEATURES, EMBEDDING_SIZE,bias=False) # for embedding
+        self.lin0 = torch.nn.Linear(NUM_NODE_FEATURES, EMBEDDING_SIZE, bias=False) # for embedding
         self.conv1 = GatedGraphConv(HIDDEN_FEATURES_SIZE, GNN_LAYERS)
         self.lin1 = torch.nn.Linear(HIDDEN_FEATURES_SIZE, 1)
         self.lin2 = torch.nn.Linear(HIDDEN_FEATURES_SIZE, 1)
