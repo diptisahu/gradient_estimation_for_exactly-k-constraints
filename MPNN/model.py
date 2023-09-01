@@ -52,15 +52,17 @@ def conditional_marginal(means, sigmas, X, i):
     conditional_var = sigmas[i] - torch.square(sigmas[i])/torch.sum(sigmas)
     return (2 * torch.pi * conditional_var)**(-1/2) * torch.exp(-1/(2 * conditional_var) * (X[i] - conditional_mean)**2)
 
-def sample_multivariate(reduced_mean, covariance_matrix):
-    m = MultivariateNormal(reduced_mean, covariance_matrix)
-    X = m.sample()
-    X = torch.cat((X, torch.tensor([k - torch.sum(X)]).to(device)), dim=0)
+def sample_multivariate(reduced_mean, covariance_matrix, training):
+    if training:
+        m = MultivariateNormal(reduced_mean, covariance_matrix)
+        X = m.sample()
+        X = torch.cat((X, torch.tensor([k - torch.sum(X)]).to(device)), dim=0)
+    else:
+        X = torch.cat((reduced_mean, torch.tensor([k - torch.sum(reduced_mean)]).to(device)), dim=0)
 
     return X
 
-## Need to check
-def calculate_grad(pred, mu, sigma, constraint_mu, constraint_covariance):
+def calculate_grad(pred, mu, sigma):
     n = len(sigma)
     dx_dmu = torch.zeros(n, n).to(device)
     dx_dsigma = torch.zeros(n, n).to(device)
@@ -72,27 +74,27 @@ def calculate_grad(pred, mu, sigma, constraint_mu, constraint_covariance):
 
 class Sample(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, mu, sigma):
+    def forward(ctx, mu, sigma, training):
         constraint_mu, constraint_covariance = multivariate_mean_variance(mu, sigma)
-        pred = sample_multivariate(constraint_mu, constraint_covariance)
-        ctx.save_for_backward(pred, mu, sigma, constraint_mu, constraint_covariance)
+        pred = sample_multivariate(constraint_mu, constraint_covariance, training)
+        ctx.save_for_backward(pred, mu, sigma)
         return pred
 
     @staticmethod
     def backward(ctx, grad_output):
-        pred, mu, sigma, constraint_mu, constraint_covariance = ctx.saved_tensors
-        dx_dmu, dx_dsigma = calculate_grad(pred, mu, sigma, constraint_mu, constraint_covariance)
-        dl_dmu = dx_dmu * grad_output
-        dl_dsigma = dx_dsigma * grad_output
-        return dl_dmu, dl_dsigma
-    
-class Net_gaussian_correction_with_sampling(torch.nn.Module):
+        pred, mu, sigma = ctx.saved_tensors
+        dx_dmu, dx_dsigma = calculate_grad(pred, mu, sigma)
+        dl_dmu = torch.matmul(grad_output, dx_dmu)
+        dl_dsigma = torch.matmul(grad_output, dx_dsigma)
+        return dl_dmu, dl_dsigma, None
+
+class Net_gaussian_correction_with_erf_loss(torch.nn.Module):
     def __init__(self, NUM_NODE_FEATURES,EMBEDDING_SIZE,GNN_LAYERS,HIDDEN_FEATURES_SIZE):
         print("GNN_LAYERS = ", GNN_LAYERS)
         print("EMBEDDING_SIZE = ", EMBEDDING_SIZE)
         print("HIDDEN_FEATURES_SIZE = ", HIDDEN_FEATURES_SIZE)
         
-        super(Net_gaussian_correction_with_sampling, self).__init__()
+        super(Net_gaussian_correction_with_erf_loss, self).__init__()
         self.lin0 = torch.nn.Linear(NUM_NODE_FEATURES, EMBEDDING_SIZE, bias=False) # for embedding
         self.conv1 = GatedGraphConv(HIDDEN_FEATURES_SIZE, GNN_LAYERS)
         self.lin1 = torch.nn.Linear(HIDDEN_FEATURES_SIZE, 1)
@@ -110,12 +112,44 @@ class Net_gaussian_correction_with_sampling(torch.nn.Module):
         mu = torch.squeeze(mu)
         sigma = torch.squeeze(sigma)
 
+        mean_bar = torch.empty_like(mu)
+        sigma_bar = torch.empty_like(sigma)
+        for i in range(0, data.num_graphs):
+            mean_bar[data.batch == i] = mu[data.batch == i] + sigma[data.batch == i]*(k - torch.sum(mu[data.batch == i]))/torch.sum(sigma[data.batch == i])
+            sigma_bar[data.batch == i] = sigma[data.batch == i] - torch.square(sigma[data.batch == i])/torch.sum(sigma[data.batch == i])
+
+        return mean_bar, sigma_bar
+
+class Net_gaussian_correction_with_sampling(torch.nn.Module):
+    def __init__(self, NUM_NODE_FEATURES,EMBEDDING_SIZE,GNN_LAYERS,HIDDEN_FEATURES_SIZE):
+        print("GNN_LAYERS = ", GNN_LAYERS)
+        print("EMBEDDING_SIZE = ", EMBEDDING_SIZE)
+        print("HIDDEN_FEATURES_SIZE = ", HIDDEN_FEATURES_SIZE)
+        
+        super(Net_gaussian_correction_with_sampling, self).__init__()
+        self.lin0 = torch.nn.Linear(NUM_NODE_FEATURES, EMBEDDING_SIZE, bias=False) # for embedding
+        self.conv1 = GatedGraphConv(HIDDEN_FEATURES_SIZE, GNN_LAYERS)
+        self.lin1 = torch.nn.Linear(HIDDEN_FEATURES_SIZE, 1)
+        self.lin2 = torch.nn.Linear(HIDDEN_FEATURES_SIZE, 1)
+        self.softplus = torch.nn.Softplus()
+
+    def forward(self, data, training):
+        x, edge_index = data.x, data.edge_index
+        x1 = torch.sigmoid(self.lin0(x)) # embedding
+        x = self.conv1(x1, edge_index)
+        x = F.relu(x)
+        mu = self.lin1(x)
+        sigma = self.softplus(self.lin2(x))
+
+        mu = torch.squeeze(mu)
+        sigma = torch.squeeze(sigma)
+
         pred = torch.empty_like(mu)
         for i in range(0, data.num_graphs):
             mu_sample = mu[data.batch == i]
             sigma_sample = sigma[data.batch == i]
 
-            pred[data.batch == i] = Sample.apply(mu_sample, sigma_sample)
+            pred[data.batch == i] = Sample.apply(mu_sample, sigma_sample, training)
 
         return pred
 

@@ -156,7 +156,7 @@ for data in loader:
     indices_sorted_elements = np.flipud(indices_sorted_elements)
     # %-----------------------------------------------------------------------
 
-systems = ['gaussian_cor_with_sampling']
+systems = ['gaussian_cor', 'gaussian_cor_with_erf_loss']
 models = []
 iteration=0
 for system in systems:
@@ -165,6 +165,8 @@ for system in systems:
 
 torch.save(models, 'models.pt')
 torch.save(test_dataset, 'test_dataset.pt')
+
+# models = torch.load('models.pt')
 
 iteration = 0
 
@@ -178,6 +180,19 @@ print("Total MOFs: {}".format(len(dataa)))
 # module for evaluating
 print()
 
+def multivariate_mean_variance(means, sigmas):
+    n = len(sigmas)
+
+    A = torch.inverse(torch.diag(torch.pow(sigmas[:-1], -1)))
+    B = torch.ones(n-1, n-1).to(device) * torch.pow(sigmas[-1], -1)
+
+    covariance_matrix = A - 1/(1 + torch.trace(torch.matmul(B, A))) * torch.matmul(A ,torch.matmul(B, A))
+
+    c = (k - means[-1])/sigmas[-1]
+    reduced_mean = torch.matmul(covariance_matrix, torch.ones(n-1).to(device)*c + torch.div(means[:-1], sigmas[:-1]))
+
+    return reduced_mean
+
 predictions = []
 variance_charge = []
 sigma_all = []
@@ -190,7 +205,21 @@ with torch.no_grad():
         for index, system in enumerate(systems):
             model = models[index]
             model.eval()
-            pred, _, _, _ = model(data)
+            if system == 'gaussian_cor':
+                pred, _, _, _ = model(data)
+            elif system == 'gaussian_cor_with_sampling':
+                pred = model(data, False)
+            else:
+                mu_bar, sigma_bar = model(data)
+                pred = torch.empty_like(mu_bar)
+                for i in range(0, data.num_graphs):
+                    mu_sample = mu_bar[data.batch == i]
+                    sigma_sample = sigma_bar[data.batch == i]
+
+                    reduced_mean = multivariate_mean_variance(mu_sample, sigma_sample)
+                    pred[data.batch == i] = torch.cat((reduced_mean, torch.tensor([0 - torch.sum(reduced_mean)]).to(device)), dim=0)
+                # pred, _ = model(data)
+
             predictions.append(pred)
 
             loss = crit(pred, label)
