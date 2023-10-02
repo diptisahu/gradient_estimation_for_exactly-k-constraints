@@ -31,7 +31,8 @@ from torch_geometric.nn.conv import MessagePassing
 from torch_geometric.nn.inits import uniform
 import torch_scatter as ts
 
-device = torch.device('cuda')
+device = torch.device('cuda:2')
+torch.manual_seed(42)
 
 k = 0
 def multivariate_mean_variance(means, sigmas):
@@ -90,9 +91,9 @@ class Sample(torch.autograd.Function):
 
 class Net_gaussian_correction_with_erf_loss(torch.nn.Module):
     def __init__(self, NUM_NODE_FEATURES,EMBEDDING_SIZE,GNN_LAYERS,HIDDEN_FEATURES_SIZE):
-        print("GNN_LAYERS = ", GNN_LAYERS)
-        print("EMBEDDING_SIZE = ", EMBEDDING_SIZE)
-        print("HIDDEN_FEATURES_SIZE = ", HIDDEN_FEATURES_SIZE)
+        # print("GNN_LAYERS = ", GNN_LAYERS)
+        # print("EMBEDDING_SIZE = ", EMBEDDING_SIZE)
+        # print("HIDDEN_FEATURES_SIZE = ", HIDDEN_FEATURES_SIZE)
         
         super(Net_gaussian_correction_with_erf_loss, self).__init__()
         self.lin0 = torch.nn.Linear(NUM_NODE_FEATURES, EMBEDDING_SIZE, bias=False) # for embedding
@@ -155,9 +156,9 @@ class Net_gaussian_correction_with_sampling(torch.nn.Module):
 
 class Net_gaussian_correction(torch.nn.Module):
     def __init__(self, NUM_NODE_FEATURES,EMBEDDING_SIZE,GNN_LAYERS,HIDDEN_FEATURES_SIZE):
-        print("GNN_LAYERS = ", GNN_LAYERS)
-        print("EMBEDDING_SIZE = ", EMBEDDING_SIZE)
-        print("HIDDEN_FEATURES_SIZE = ", HIDDEN_FEATURES_SIZE)
+        # print("GNN_LAYERS = ", GNN_LAYERS)
+        # print("EMBEDDING_SIZE = ", EMBEDDING_SIZE)
+        # print("HIDDEN_FEATURES_SIZE = ", HIDDEN_FEATURES_SIZE)
         
         super(Net_gaussian_correction, self).__init__()
         self.lin0 = torch.nn.Linear(NUM_NODE_FEATURES, EMBEDDING_SIZE, bias=False) # for embedding
