@@ -30,7 +30,7 @@ def erf_loss(mu, sigma, b):
 
 def charge_prediction_system(train_loader,valid_loader,test_loader,NUM_NODE_FEATURES,EMBEDDING_SIZE,GNN_LAYERS,HIDDEN_FEATURES_SIZE,train_data_size, valid_data_size, test_data_size, MAX_EPOCHS, iteration, system, patience, learning_rate = 0.005, crit = torch.nn.L1Loss()):
 	# initializing the model
-	device = torch.device('cuda:2')
+	device = torch.device('cuda')
 	torch.manual_seed(42)
 	if system == 'gaussian_cor':
 		# print(">>> gaussian_correction_model")

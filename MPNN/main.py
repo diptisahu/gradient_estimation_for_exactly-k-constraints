@@ -47,7 +47,7 @@ HIDDEN_FEATURES_SIZE = 40
 PATIENCE_THRESHOLD = 150
 LEARNING_RATE = 0.005
 
-device = torch.device('cuda:2')
+device = torch.device('cuda')
 # crit = torch.nn.MSELoss()
 crit = torch.nn.L1Loss()
 

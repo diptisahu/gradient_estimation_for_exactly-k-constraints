@@ -31,7 +31,7 @@ from torch_geometric.nn.conv import MessagePassing
 from torch_geometric.nn.inits import uniform
 import torch_scatter as ts
 
-device = torch.device('cuda:2')
+device = torch.device('cuda')
 torch.manual_seed(42)
 
 k = 0
