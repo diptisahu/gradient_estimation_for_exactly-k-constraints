@@ -74,27 +74,27 @@ def charge_prediction_system(train_loader,valid_loader,test_loader,NUM_NODE_FEAT
 # 			print("||| PREDICTION SUM FOR ONE MOF: ", torch.sum(pred ))
 		loss_epoch = loss_all / train_data_size
 
-		# evaluating model
-		model.eval()
-		loss_all = 0
-		with torch.no_grad():
-			for data in train_loader:
-				data = data.to(device)
-				label = data.y.to(device)
+		# # evaluating model
+		# model.eval()
+		# loss_all = 0
+		# with torch.no_grad():
+		# 	for data in train_loader:
+		# 		data = data.to(device)
+		# 		label = data.y.to(device)
 
-				if system == 'gaussian_cor':
-					pred, _, _, _ = model(data)
-					loss = crit(pred, label)
-				elif system == 'gaussian_cor_with_sampling':
-					pred = model(data, False)
-					loss = crit(pred, label)
-				else:
-					mu_bar, sigma_bar = model(data)
-					loss = erf_loss(mu_bar, sigma_bar, label)
+		# 		if system == 'gaussian_cor':
+		# 			pred, _, _, _, _ = model(data, True)
+		# 			loss = crit(pred, label)
+		# 		elif system == 'gaussian_cor_with_sampling':
+		# 			pred = model(data, False)
+		# 			loss = crit(pred, label)
+		# 		else:
+		# 			mu_bar, sigma_bar, _ = model(data, True)
+		# 			loss = erf_loss(mu_bar, sigma_bar, label)
 
-				loss_all += data.num_graphs * loss.item()
-		train_acc = loss_all / train_data_size
-		train_total_loss.append(train_acc)
+		# 		loss_all += data.num_graphs * loss.item()
+		# train_acc = loss_all / train_data_size
+		# train_total_loss.append(train_acc)
 
 		# evaluating valid dataset
 		model.eval()
@@ -118,26 +118,26 @@ def charge_prediction_system(train_loader,valid_loader,test_loader,NUM_NODE_FEAT
 		valid_acc = loss_all / valid_data_size
 		valid_total_loss.append(valid_acc)
 
-		# evaluating test dataset
-		loss_all = 0
-		with torch.no_grad():
-			for data in test_loader:
-				data = data.to(device)
-				label = data.y.to(device)
+		# # evaluating test dataset
+		# loss_all = 0
+		# with torch.no_grad():
+		# 	for data in test_loader:
+		# 		data = data.to(device)
+		# 		label = data.y.to(device)
 
-				if system == 'gaussian_cor':
-					pred, _, _, _ = model(data)
-					loss = crit(pred, label)
-				elif system == 'gaussian_cor_with_sampling':
-					pred = model(data, False)
-					loss = crit(pred, label)
-				else:
-					mu_bar, sigma_bar = model(data)
-					loss = erf_loss(mu_bar, sigma_bar, label)
+		# 		if system == 'gaussian_cor':
+		# 			pred, _, _, _ = model(data, )
+		# 			loss = crit(pred, label)
+		# 		elif system == 'gaussian_cor_with_sampling':
+		# 			pred = model(data, False)
+		# 			loss = crit(pred, label)
+		# 		else:
+		# 			mu_bar, sigma_bar = model(data)
+		# 			loss = erf_loss(mu_bar, sigma_bar, label)
 					
-				loss_all += data.num_graphs * loss.item()
-		test_acc = loss_all / test_data_size
-		test_total_loss.append(test_acc)
+		# 		loss_all += data.num_graphs * loss.item()
+		# test_acc = loss_all / test_data_size
+		# test_total_loss.append(test_acc)
 			
 		if valid_acc <= min_valid_loss: # keep tracking of model with lowest validation loss
 			torch.save(model.state_dict(), './results/loss_iteration_' + str(iteration)+'_system_' + system + '.pth')

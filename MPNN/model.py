@@ -30,6 +30,7 @@ from torch.nn import Parameter as Param
 from torch_geometric.nn.conv import MessagePassing
 from torch_geometric.nn.inits import uniform
 import torch_scatter as ts
+import math
 
 device = torch.device('cuda')
 torch.manual_seed(42)
@@ -38,7 +39,7 @@ k = 0
 def multivariate_mean_variance(means, sigmas):
     n = len(sigmas)
 
-    A = torch.inverse(torch.diag(torch.pow(sigmas[:-1], -1)))
+    A = torch.diag(torch.pow(sigmas[:-1]))
     B = torch.ones(n-1, n-1).to(device) * torch.pow(sigmas[-1], -1)
 
     covariance_matrix = A - 1/(1 + torch.trace(torch.matmul(B, A))) * torch.matmul(A ,torch.matmul(B, A))

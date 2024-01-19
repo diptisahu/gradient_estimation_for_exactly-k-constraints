@@ -27,6 +27,7 @@ import random
 import copy
 import csv
 import torch
+import math
 
 print("----------------------------------------------")
 print(">>> loading parameters")
@@ -38,7 +39,7 @@ VALIDATION_SET_CUT = 10  # percentage
 
 MAX_EPOCHS = 3000
 BATCH_SIZE = 64
-MAX_ITERATIONS = 10
+MAX_ITERATIONS = 1
 random.seed(42)
 
 GNN_LAYERS = 4
@@ -132,7 +133,7 @@ print()
 def multivariate_mean_variance(means, sigmas):
     n = len(sigmas)
 
-    A = torch.inverse(torch.diag(torch.pow(sigmas[:-1], -1)))
+    A = torch.diag(sigmas[:-1])
     B = torch.ones(n-1, n-1).double().to(device) * torch.pow(sigmas[-1], -1)
 
     covariance_matrix = A - 1/(1 + torch.trace(torch.matmul(B, A))) * torch.matmul(A ,torch.matmul(B, A))
@@ -140,7 +141,12 @@ def multivariate_mean_variance(means, sigmas):
     c = (k - means[-1])/sigmas[-1]
     reduced_mean = torch.matmul(covariance_matrix, torch.ones(n-1).to(device)*c + torch.div(means[:-1], sigmas[:-1]))
 
-    return reduced_mean
+    return reduced_mean, covariance_matrix
+
+def nloglikelihood(mu, sigma, y):
+    (Sign, LOGDET) = torch.linalg.slogdet(sigma)
+    return len(y)*math.log(2*torch.pi)/2 + LOGDET/2 + 0.5*torch.matmul(torch.matmul((y - mu).t(), torch.inverse(sigma)), y - mu)
+    # return len(y)*math.log(2*torch.pi)/2 + torch.log(torch.linalg.det(sigma) + alpha)/2 + 0.5*torch.matmul(torch.matmul((y - mu).t(), torch.inverse(sigma)), y - mu)
 
 print("BATCH_SIZE = ", BATCH_SIZE)
 print("GNN_LAYERS = ", GNN_LAYERS)
@@ -165,6 +171,15 @@ final_loss = {
     'gaussian_with_erf_loss' : [],
     'gaussian_with_erf_loss_model_1': []
 }
+
+ll_probs = {
+    'gaussian_cor' : [],
+    'gaussian_cor_model_1' : [],
+    'gaussian_with_erf_loss' : [],
+    'gaussian_with_erf_loss_model_1': []
+}
+
+print("Method \t\t\t MAD \t\t\t Negative Log-likehood Probability")
 
 for iteration in range(MAX_ITERATIONS):
     unique_flag = False
@@ -204,7 +219,8 @@ for iteration in range(MAX_ITERATIONS):
     valid_loader = DataLoader(valid_dataset, batch_size=len(valid_dataset))
     test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE)
 
-    systems = ['gaussian_with_erf_loss']
+    # systems = ['gaussian_with_erf_loss']
+    systems = ['gaussian_cor']
     # system = 'gaussian_with_erf_loss'
     # models = []
     # iteration=0
@@ -213,17 +229,19 @@ for iteration in range(MAX_ITERATIONS):
     for system in systems:
     # for i in range(3):
         if system == 'gaussian_cor':
-            model, train_loss, valid_loss, test_loss = charge_prediction_system(train_loader, valid_loader, test_loader, NUM_NODE_FEATURES, EMBEDDING_SIZE, GNN_LAYERS, HIDDEN_FEATURES_SIZE, train_data_size, valid_data_size, test_data_size, MAX_EPOCHS, iteration, system, PATIENCE_THRESHOLD, LEARNING_RATE, crit)
+            model1, train_loss, valid_loss, test_loss = charge_prediction_system(train_loader, valid_loader, test_loader, NUM_NODE_FEATURES, EMBEDDING_SIZE, GNN_LAYERS, HIDDEN_FEATURES_SIZE, train_data_size, valid_data_size, test_data_size, MAX_EPOCHS, iteration, system, PATIENCE_THRESHOLD, LEARNING_RATE, crit)
+            # model2, train_loss, valid_loss, test_loss = charge_prediction_system(train_loader, valid_loader, test_loader, NUM_NODE_FEATURES, EMBEDDING_SIZE, GNN_LAYERS, HIDDEN_FEATURES_SIZE, train_data_size, valid_data_size, test_data_size, MAX_EPOCHS, iteration, system, PATIENCE_THRESHOLD, LEARNING_RATE, crit)
             # models.append(model)
         elif system == 'gaussian_with_erf_loss':
             m = len(train_loader)
             model1, train_loss, valid_loss, test_loss = charge_prediction_system(train_loader, valid_loader, test_loader, NUM_NODE_FEATURES, EMBEDDING_SIZE, GNN_LAYERS, HIDDEN_FEATURES_SIZE, train_data_size, valid_data_size, test_data_size, MAX_EPOCHS, iteration, system, PATIENCE_THRESHOLD, LEARNING_RATE, crit)
-            model2, train_loss, valid_loss, test_loss = charge_prediction_system(train_loader, valid_loader, test_loader, NUM_NODE_FEATURES, EMBEDDING_SIZE, GNN_LAYERS, HIDDEN_FEATURES_SIZE, train_data_size, valid_data_size, test_data_size, MAX_EPOCHS, iteration, system, PATIENCE_THRESHOLD, LEARNING_RATE, crit)
+            # model2, train_loss, valid_loss, test_loss = charge_prediction_system(train_loader, valid_loader, test_loader, NUM_NODE_FEATURES, EMBEDDING_SIZE, GNN_LAYERS, HIDDEN_FEATURES_SIZE, train_data_size, valid_data_size, test_data_size, MAX_EPOCHS, iteration, system, PATIENCE_THRESHOLD, LEARNING_RATE, crit)
         # train_losses[system].append(train_loss)
         # valid_losses[system].append(valid_loss)
         # test_losses[system].append(test_loss)
     
-    torch.save([model1, model2], 'models.pt')
+    # torch.save([model1, model2], 'models.pt')
+    torch.save(model1, 'model_' + system + '.pt')
     # torch.save(test_dataset, 'test_dataset.pt')
     # models = torch.load('models.pt')
 
@@ -235,6 +253,9 @@ for iteration in range(MAX_ITERATIONS):
 
     variance_charge = []
     sigma_all = []
+    flag = False
+    llp_max = 0
+    llp_min = float('inf')
     with torch.no_grad():
         for data in loader:
             data = data.to(device)
@@ -242,53 +263,135 @@ for iteration in range(MAX_ITERATIONS):
             features = data.x.to(device)
             # print("Total Nodes: {}".format(len(label)))
 
-            print("Method \t\t\t MAD")
-
             for index, system in enumerate(systems):
             # for index in range(1):
                 # model = models[index]
                 # model.eval()
                 if system == 'gaussian_cor':
-                    model.eval()
-                    pred, _, _, _ = model(data)
+                    # model.eval()
+                    # pred, _, _, _ = model(data)
+
+                    model1.eval()
+                    pred, _, sigma, _ = model1(data)
+
+                    # model2.eval()
+                    # pred2, _, sigma2, _ = model2(data)
+
+                    # pred = (pred1 + pred2)/2
+                    # sigma = (sigma1 + sigma2)/4
+
+                    # pred, sigma = pred1, sigma1
+
+                    llp = 0
+                    # llp1 = 0
+                    for i in range(0, data.num_graphs):
+                        sigma_matrix = torch.diag(sigma[data.batch == i])
+                        temp = nloglikelihood(pred[data.batch == i], sigma_matrix, label[data.batch == i])
+                        llp += temp
+
+                        # if temp/len(sigma[data.batch == i]) > 50:
+
+                        #     print('mean: ', pred[data.batch == i])
+                        #     print('sigma: ', sigma[data.batch == i])
+                        #     print('label: ', label[data.batch == i])
+                        #     print(llp/len(sigma[data.batch == i]))
+                        #     flag = True
+                        #     break
+
+                        llp_max = max(llp_max, temp/len(sigma[data.batch == i]))
+                        llp_min = min(llp_min, temp/len(sigma[data.batch == i]))                        
+
+                        # sigma_matrix1 = torch.diag(sigma1[data.batch == i])
+                        # llp1 += nloglikelihood(pred1[data.batch == i], sigma_matrix1, label[data.batch == i])
+
+                    llp = llp/len(data)
+                    # llp1 = llp1/len(data)
+                    if flag:
+                        break
+
                 elif system == 'gaussian_cor_with_sampling':
-                    pred = model(data, False)
+                    pred = model1(data, False)
                 else:
                     model1.eval()
-                    model2.eval()
+                    # model2.eval()
 
-                    mu_bar, sigma_bar = model1(data)
-                    pred1 = torch.empty_like(mu_bar)
+                    mu_bar1, sigma_bar1 = model1(data)
+                    pred = torch.empty_like(mu_bar1)
+
+                    # mu_bar2, sigma_bar2 = model2(data)
+                    # pred2 = torch.empty_like(mu_bar2)
+                    
+                    llp = 0
+                    # llp1 = 0
                     for i in range(0, data.num_graphs):
-                        mu_sample = mu_bar[data.batch == i]
-                        sigma_sample = sigma_bar[data.batch == i]
+                        mu_sample1 = mu_bar1[data.batch == i]
+                        sigma_sample1 = sigma_bar1[data.batch == i]
 
-                        reduced_mean = multivariate_mean_variance(mu_sample, sigma_sample)
-                        pred1[data.batch == i] = torch.cat((reduced_mean, torch.tensor([0 - torch.sum(reduced_mean)]).to(device)), dim=0)
+                        reduced_mean1, covariance_matrix1 = multivariate_mean_variance(mu_sample1, sigma_sample1)
+                        pred[data.batch == i] = torch.cat((reduced_mean1, torch.tensor([0 - torch.sum(reduced_mean1)]).to(device)), dim=0)
 
-                    mu_bar, sigma_bar = model2(data)
-                    pred2 = torch.empty_like(mu_bar)
-                    for i in range(0, data.num_graphs):
-                        mu_sample = mu_bar[data.batch == i]
-                        sigma_sample = sigma_bar[data.batch == i]
+                        # mu_sample2 = mu_bar2[data.batch == i]
+                        # sigma_sample2 = sigma_bar2[data.batch == i]
 
-                        reduced_mean = multivariate_mean_variance(mu_sample, sigma_sample)
-                        pred2[data.batch == i] = torch.cat((reduced_mean, torch.tensor([0 - torch.sum(reduced_mean)]).to(device)), dim=0)
+                        # reduced_mean2, covariance_matrix2 = multivariate_mean_variance(mu_sample2, sigma_sample2)
+                        # pred2[data.batch == i] = torch.cat((reduced_mean2, torch.tensor([0 - torch.sum(reduced_mean2)]).to(device)), dim=0)
+
+                        # reduced_mean = (reduced_mean1 + reduced_mean2)/2
+                        # covariance_matrix = (covariance_matrix1 + covariance_matrix2)/4
+
+                        # llp += nloglikelihood(reduced_mean, covariance_matrix, label[data.batch == i][:-1])
+                        temp = nloglikelihood(reduced_mean1, covariance_matrix1, label[data.batch == i][:-1])
+                        llp += temp
+
+                        # if llp/len(sigma_sample1) < 0:
+                        #     print('mean: ', mu_sample1)
+                        #     print('sigma: ', sigma_sample1)
+                        #     print('label: ', label[data.batch == i])
+                        #     print(llp/len(sigma_sample1))
+                        #     flag = True
+                        #     break
+
+                        llp_max = max(llp_max, temp/len(sigma_sample1))
+                        llp_min = min(llp_min, temp/len(sigma_sample1))
+                        # print('mean: ', mu_sample1)
+                        # print('sigma: ', sigma_sample1)
+                        # print('label: ', label[data.batch == i])
+                        # print(llp/len(sigma_sample1))
+                        # break
+
+                    llp = llp/len(data)
+
+                    if flag:
+                        break
+                    # llp1 = llp1/len(data)
+                    
+                    # for i in range(0, data.num_graphs):
+                    #     mu_sample = mu_bar[data.batch == i]
+                    #     sigma_sample = sigma_bar[data.batch == i]
+
+                    #     reduced_mean = multivariate_mean_variance(mu_sample, sigma_sample)
+                    #     pred2[data.batch == i] = torch.cat((reduced_mean, torch.tensor([0 - torch.sum(reduced_mean)]).to(device)), dim=0)
                     # pred, _ = model(data)
 
-                    pred = (pred1 + pred2)/2
+                    # pred = (pred1 + pred2)/2
 
-                    loss = crit(pred1, label)
-                    final_loss["gaussian_with_erf_loss_model_1"].append(loss.item())
-                    print(system+"_model1", "\t\t {:.6f}".format(loss.item()))
+                    # loss = crit(pred1, label)
+                    # final_loss["gaussian_with_erf_loss_model_1"].append(loss.item())
+                    # print(system+"_model1", "\t\t {:.6f}".format(loss.item()))
 
                     # loss = crit(pred2, label)
                     # print(system+"_model2", "\t\t {:.6f}".format(loss.item()))
 
                 loss = crit(pred, label)
-                print(system, "\t\t {:.6f}".format(loss.item()))
+                # print(system, "\t\t {:.6f}".format(loss.item()), "\t\t {:.6f}".format(llp))
+                print(system, "\t\t {:.6f}".format(loss.item()), "\t\t {:.6f}".format(llp))
+                # print('gaussian_with_erf_loss_model_1', "\t\t {:.6f}".format(loss.item()), "\t\t {:.6f}".format(llp1))
                 
                 final_loss[system].append(loss.item())
+                ll_probs[system].append(llp)
+                print('llp_max', llp_max)
+                print('llp_min', llp_min)
+                # ll_probs['gaussian_cor_model_1'].append(llp1)
     
 for system in systems:
     # train_losses[system] = np.vstack(train_losses[system])
@@ -305,17 +408,15 @@ for system in systems:
     for item in final_loss[system]:
         dev = np.absolute(item - mean)
         sum += dev
+
+    avg_llp = torch.mean(ll_probs[system])
     
-    print(system, mean, sum/len(final_loss[system]))
+    print(system, avg_llp)
 
-system = "gaussian_with_erf_loss_model_1"
-mean = np.mean(final_loss[system])
-sum = 0
-for item in final_loss[system]:
-    dev = np.absolute(item - mean)
-    sum += dev
+# system = "gaussian_cor_model_1"
+# avg_llp = np.mean(ll_probs[system])
 
-print(system, mean, sum/len(final_loss[system]))
+# print(system, avg_llp)
 
 # hfont = {'fontname':'DejaVu Sans'}
 # fontsize_label_legend = 24
